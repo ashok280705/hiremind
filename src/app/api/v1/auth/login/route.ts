@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { NextRequest } from "next/server";
-import { getDb } from "@/lib/db";
+import { supabase } from "@/lib/db";
 import { verifyPassword, createToken } from "@/lib/auth";
 import { badRequest } from "@/lib/apiHelpers";
 
@@ -9,8 +9,12 @@ export async function POST(req: NextRequest) {
   const { email, password, role } = await req.json();
   if (!email || !password) return badRequest("email and password are required.");
 
-  const db = getDb();
-  const user = db.prepare("SELECT * FROM users WHERE email = ?").get(email) as any;
+  const { data: user } = await supabase
+    .from("users")
+    .select("*")
+    .eq("email", email)
+    .single();
+
   if (!user || !(await verifyPassword(password, user.hashed_password))) {
     return Response.json({ success: false, error: "Invalid email or password." }, { status: 401 });
   }
@@ -24,7 +28,7 @@ export async function POST(req: NextRequest) {
   }
 
   const token = await createToken(user.id);
-  const safeUser = { ...user };
+  const safeUser = { ...user } as any;
   delete safeUser.hashed_password;
   safeUser.role = userRole;
   return Response.json({ access_token: token, token_type: "bearer", user: safeUser });

@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { NextRequest } from "next/server";
-import { getDb } from "@/lib/db";
+import { supabase } from "@/lib/db";
 import { authenticateRecruiter, unauthorized, forbidden, notFound } from "@/lib/apiHelpers";
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -11,12 +11,21 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const { id } = await params;
   const { rating, ai_insight = null } = await req.json();
 
-  const db = getDb();
-  if (!db.prepare("SELECT id FROM interviews WHERE id = ?").get(id)) return notFound("Interview not found.");
-  db.prepare("UPDATE interviews SET status = 'completed', rating = ?, ai_insight = ? WHERE id = ?").run(rating, ai_insight, id);
+  const { data: existing } = await supabase.from("interviews").select("id").eq("id", id).single();
+  if (!existing) return notFound("Interview not found.");
 
-  const iv = db.prepare("SELECT * FROM interviews WHERE id = ?").get(id) as any;
-  const candidate = db.prepare("SELECT name FROM candidates WHERE id = ?").get(iv.candidate_id) as any;
+  await supabase
+    .from("interviews")
+    .update({ status: "completed", rating, ai_insight })
+    .eq("id", id);
+
+  const { data: iv } = await supabase.from("interviews").select("*").eq("id", id).single();
+  const { data: candidate } = await supabase
+    .from("candidates")
+    .select("name")
+    .eq("id", iv.candidate_id)
+    .single();
+
   const name = candidate?.name || "";
   const candidate_avatar = name.split(" ").map((p: string) => p[0]).join("").toUpperCase().slice(0, 2) || "?";
   return Response.json({ ...iv, candidate_name: name, candidate_avatar });

@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { verifyToken } from "./auth";
-import { getDb } from "./db";
+import { supabase } from "./db";
 
 export async function authenticate(req: NextRequest): Promise<number | null> {
   const auth = req.headers.get("authorization") || "";
@@ -8,8 +8,13 @@ export async function authenticate(req: NextRequest): Promise<number | null> {
   if (!token) return null;
   const userId = await verifyToken(token);
   if (!userId) return null;
-  const user = getDb().prepare("SELECT id FROM users WHERE id = ? AND is_active = 1").get(userId);
-  return user ? userId : null;
+  const { data } = await supabase
+    .from("users")
+    .select("id")
+    .eq("id", userId)
+    .eq("is_active", true)
+    .single();
+  return data ? userId : null;
 }
 
 export async function authenticateWithRole(req: NextRequest): Promise<{ userId: number; role: string } | null> {
@@ -18,8 +23,13 @@ export async function authenticateWithRole(req: NextRequest): Promise<{ userId: 
   if (!token) return null;
   const userId = await verifyToken(token);
   if (!userId) return null;
-  const user = getDb().prepare("SELECT id, role FROM users WHERE id = ? AND is_active = 1").get(userId) as { id: number; role: string } | undefined;
-  return user ? { userId: user.id, role: user.role || "recruiter" } : null;
+  const { data } = await supabase
+    .from("users")
+    .select("id, role")
+    .eq("id", userId)
+    .eq("is_active", true)
+    .single();
+  return data ? { userId: data.id, role: data.role || "recruiter" } : null;
 }
 
 export function forbidden(msg = "Forbidden") {

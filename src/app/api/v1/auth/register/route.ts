@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { getDb } from "@/lib/db";
+import { supabase } from "@/lib/db";
 import { hashPassword, createToken } from "@/lib/auth";
 import { badRequest } from "@/lib/apiHelpers";
 
@@ -9,17 +9,31 @@ export async function POST(req: NextRequest) {
 
   const normalizedRole = role === "candidate" ? "candidate" : "recruiter";
 
-  const db = getDb();
-  if (db.prepare("SELECT id FROM users WHERE email = ?").get(email)) {
+  const { data: existing } = await supabase
+    .from("users")
+    .select("id")
+    .eq("email", email)
+    .single();
+  if (existing) {
     return badRequest("Email already registered.");
   }
 
   const hashed = await hashPassword(password);
-  const result = db.prepare(
-    "INSERT INTO users (name, email, hashed_password, role) VALUES (?, ?, ?, ?)"
-  ).run(name, email, hashed, normalizedRole);
+  const { data: user, error: insertError } = await supabase
+    .from("users")
+    .insert({ name, email, hashed_password: hashed, role: normalizedRole })
+    .select("id, name, email, role, created_at")
+    .single();
 
-  const user = db.prepare("SELECT id, name, email, role, created_at FROM users WHERE id = ?").get(result.lastInsertRowid);
-  const token = await createToken(Number(result.lastInsertRowid));
+  if (insertError) {
+    console.error("Registration insert error:", insertError);
+    return Response.json({ success: false, error: "Failed to create user account." }, { status: 500 });
+  }
+
+  if (!user) {
+    return Response.json({ success: false, error: "User creation failed unexpectedly." }, { status: 500 });
+  }
+
+  const token = await createToken(user.id);
   return Response.json({ access_token: token, token_type: "bearer", user }, { status: 201 });
 }

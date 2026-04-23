@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { NextRequest } from "next/server";
-import { getDb } from "@/lib/db";
+import { supabase } from "@/lib/db";
 import { authenticateRecruiter, unauthorized, forbidden } from "@/lib/apiHelpers";
 
 export async function GET(req: NextRequest) {
@@ -9,16 +9,33 @@ export async function GET(req: NextRequest) {
   if (userId === null) return unauthorized();
   if (userId === -1) return forbidden("Recruiter access required.");
 
-  const db = getDb();
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
 
-  const active_jobs = (db.prepare("SELECT COUNT(*) as c FROM jobs WHERE status = 'active'").get() as any).c;
-  const total_candidates = (db.prepare("SELECT COUNT(*) as c FROM candidates").get() as any).c;
-  const scheduled_interviews = (db.prepare("SELECT COUNT(*) as c FROM interviews WHERE status = 'scheduled'").get() as any).c;
-  const hires_this_month = (db.prepare(
-    "SELECT COUNT(*) as c FROM candidates WHERE status = 'hired' AND applied_date >= ?"
-  ).get(monthStart) as any).c;
+  const { count: active_jobs } = await supabase
+    .from("jobs")
+    .select("*", { count: "exact", head: true })
+    .eq("status", "active");
 
-  return Response.json({ active_jobs, total_candidates, scheduled_interviews, hires_this_month });
+  const { count: total_candidates } = await supabase
+    .from("candidates")
+    .select("*", { count: "exact", head: true });
+
+  const { count: scheduled_interviews } = await supabase
+    .from("interviews")
+    .select("*", { count: "exact", head: true })
+    .eq("status", "scheduled");
+
+  const { count: hires_this_month } = await supabase
+    .from("candidates")
+    .select("*", { count: "exact", head: true })
+    .eq("status", "hired")
+    .gte("applied_date", monthStart);
+
+  return Response.json({
+    active_jobs: active_jobs || 0,
+    total_candidates: total_candidates || 0,
+    scheduled_interviews: scheduled_interviews || 0,
+    hires_this_month: hires_this_month || 0,
+  });
 }

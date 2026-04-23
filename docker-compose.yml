@@ -8,8 +8,6 @@ services:
       - .env
     ports:
       - "3000:3000"
-    volumes:
-      - hiremind_data:/app/data
     restart: unless-stopped
     healthcheck:
       test:
@@ -32,10 +30,5 @@ services:
       - init
     env_file:
       - .env
-    volumes:
-      - hiremind_data:/app/data
-    command: ["npm", "run", "seed"]
+    command: ["npx", "tsx", "seed.ts"]
     restart: "no"
-
-volumes:
-  hiremind_data:

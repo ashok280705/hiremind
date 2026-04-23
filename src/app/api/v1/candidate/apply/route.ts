@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { NextRequest } from "next/server";
-import { getDb } from "@/lib/db";
+import { supabase } from "@/lib/db";
 import { authenticateWithRole, unauthorized, forbidden } from "@/lib/apiHelpers";
 import { extractText, parseResumeText, scoreResume } from "@/lib/resumeEngine";
 
@@ -19,12 +19,21 @@ export async function POST(req: NextRequest) {
   if (!jobIdRaw) return Response.json({ success: false, error: "Job selection is required." }, { status: 400 });
 
   const jobId = Number(jobIdRaw);
-  const db = getDb();
-  const job = db.prepare("SELECT * FROM jobs WHERE id = ? AND status = 'active'").get(jobId) as any;
+  const { data: job } = await supabase
+    .from("jobs")
+    .select("*")
+    .eq("id", jobId)
+    .eq("status", "active")
+    .single();
   if (!job) return Response.json({ success: false, error: "Job not found or no longer open." }, { status: 404 });
 
   // Prevent duplicate applications to the same job by the same user
-  const existing = db.prepare("SELECT id FROM candidates WHERE user_id = ? AND job_id = ?").get(auth.userId, jobId);
+  const { data: existing } = await supabase
+    .from("candidates")
+    .select("id")
+    .eq("user_id", auth.userId)
+    .eq("job_id", jobId)
+    .single();
   if (existing) {
     return Response.json({ success: false, error: "You have already applied to this job." }, { status: 409 });
   }
@@ -44,46 +53,60 @@ export async function POST(req: NextRequest) {
   if (!text) return Response.json({ success: false, error: "No text could be extracted from the resume." }, { status: 422 });
 
   const parsed = parseResumeText(file.name, text);
-  const jdText = [job.title, job.description || "", "Required skills: " + (JSON.parse(job.skills || "[]") as string[]).join(", ")].join("\n");
+  const jobSkills = Array.isArray(job.skills) ? job.skills : JSON.parse(job.skills || "[]");
+  const jdText = [job.title, job.description || "", "Required skills: " + (jobSkills as string[]).join(", ")].join("\n");
   const score = scoreResume(parsed, jdText.length >= 10 ? jdText : jdText.padEnd(10, " "));
 
   // Pull the candidate's user account for name/email defaults
-  const account = db.prepare("SELECT name, email FROM users WHERE id = ?").get(auth.userId) as { name: string; email: string };
+  const { data: account, error: accountError } = await supabase
+    .from("users")
+    .select("name, email")
+    .eq("id", auth.userId)
+    .single();
+
+  if (accountError || !account) {
+    return Response.json({ success: false, error: "User account not found." }, { status: 404 });
+  }
   const finalName = account.name;
   const finalEmail = account.email;
 
   try {
-    db.prepare(`
-      INSERT INTO resumes (filename, name, email, phone, experience_years, skills, education, raw_text)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      parsed.filename, finalName, finalEmail, parsed.phone,
-      parsed.experience_years, JSON.stringify(parsed.skills),
-      JSON.stringify(parsed.education), parsed.raw_text
-    );
+    await supabase.from("resumes").insert({
+      filename: parsed.filename,
+      name: finalName,
+      email: finalEmail,
+      phone: parsed.phone,
+      experience_years: parsed.experience_years,
+      skills: parsed.skills,
+      education: parsed.education,
+      raw_text: parsed.raw_text,
+    });
   } catch { /* non-fatal */ }
 
-  const result = db.prepare(`
-    INSERT INTO candidates (name, email, role, experience, skills, status, fit_score, resume_score, bias_flag, diversity_score, success_prediction, job_id, user_id, resume_filename)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    finalName, finalEmail, job.title,
-    parsed.experience_years ? `${parsed.experience_years} years` : null,
-    JSON.stringify(parsed.skills),
-    "new",
-    score.fit_score,
-    Math.round(score.skill_match * 100) / 100,
-    0,
-    Math.round(((score.semantic_similarity + score.skill_match) / 2) * 100) / 100,
-    Math.round(score.fit_score * 0.95 * 100) / 100,
-    jobId,
-    auth.userId,
-    parsed.filename,
-  );
+  const { data: candidate } = await supabase
+    .from("candidates")
+    .insert({
+      name: finalName,
+      email: finalEmail,
+      role: job.title,
+      experience: parsed.experience_years ? `${parsed.experience_years} years` : null,
+      skills: parsed.skills,
+      status: "new",
+      fit_score: score.fit_score,
+      resume_score: Math.round(score.skill_match * 100) / 100,
+      bias_flag: false,
+      diversity_score: Math.round(((score.semantic_similarity + score.skill_match) / 2) * 100) / 100,
+      success_prediction: Math.round(score.fit_score * 0.95 * 100) / 100,
+      job_id: jobId,
+      user_id: auth.userId,
+      resume_filename: parsed.filename,
+    })
+    .select("id")
+    .single();
 
   return Response.json({
     success: true,
-    candidate_id: result.lastInsertRowid,
+    candidate_id: candidate?.id,
     job: { id: job.id, title: job.title },
     fit_score: score.fit_score,
     recommendation: score.recommendation,

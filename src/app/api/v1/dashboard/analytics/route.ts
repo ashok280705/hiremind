@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { NextRequest } from "next/server";
-import { getDb } from "@/lib/db";
+import { supabase } from "@/lib/db";
 import { authenticateWithRole, unauthorized, forbidden } from "@/lib/apiHelpers";
 
 function monthKey(d: Date) {
@@ -13,10 +13,11 @@ export async function GET(req: NextRequest) {
   if (!auth) return unauthorized();
   if (auth.role !== "recruiter") return forbidden("Recruiter access required.");
 
-  const db = getDb();
-
   // ── Top-line KPI metrics ────────────────────────────────────────────
-  const candidates = db.prepare("SELECT status, fit_score, resume_score, bias_flag, diversity_score, success_prediction, applied_date, skills FROM candidates").all() as any[];
+  const { data: candidatesRaw } = await supabase
+    .from("candidates")
+    .select("status, fit_score, resume_score, bias_flag, diversity_score, success_prediction, applied_date, skills");
+  const candidates = candidatesRaw || [];
   const totalCand = candidates.length;
 
   const avgFitScore = totalCand ? Math.round(candidates.reduce((s, c) => s + (c.fit_score || 0), 0) / totalCand * 10) / 10 : 0;
@@ -44,16 +45,20 @@ export async function GET(req: NextRequest) {
   for (let i = 5; i >= 0; i--) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
     const next = new Date(d.getFullYear(), d.getMonth() + 1, 1);
-    const start = d.toISOString();
-    const end = next.toISOString();
+    const start = d.toISOString().slice(0, 10);
+    const end = next.toISOString().slice(0, 10);
 
-    const rows = candidates.filter((c) => c.applied_date >= start.slice(0, 10) && c.applied_date < end.slice(0, 10));
+    const rows = candidates.filter((c) => c.applied_date >= start && c.applied_date < end);
     const apps = rows.length;
-    const ivs = (db.prepare(
-      "SELECT COUNT(*) as c FROM interviews WHERE date >= ? AND date < ?"
-    ).get(start.slice(0, 10), end.slice(0, 10)) as any).c;
+
+    const { count: ivs } = await supabase
+      .from("interviews")
+      .select("*", { count: "exact", head: true })
+      .gte("date", start)
+      .lt("date", end);
+
     const hiredThisMonth = rows.filter((r) => r.status === "hired").length;
-    months.push({ month: monthKey(d), applications: apps, interviewed: ivs, hired: hiredThisMonth });
+    months.push({ month: monthKey(d), applications: apps, interviewed: ivs || 0, hired: hiredThisMonth });
   }
 
   // ── Diversity breakdown (bucketed from candidates.diversity_score) ──
@@ -80,12 +85,18 @@ export async function GET(req: NextRequest) {
   }
 
   // ── AI accuracy (derived from real data) ─────────────────────────────
-  const resumesCount = (db.prepare("SELECT COUNT(*) as c FROM resumes").get() as any).c;
+  const { count: resumesCount } = await supabase
+    .from("resumes")
+    .select("*", { count: "exact", head: true });
+
   const withSkills = candidates.filter((c) => {
-    try { return (JSON.parse((c as any).skills || "[]") as string[]).length > 0; } catch { return false; }
+    try {
+      const skills = Array.isArray(c.skills) ? c.skills : JSON.parse((c as any).skills || "[]");
+      return skills.length > 0;
+    } catch { return false; }
   });
   const accuracy = [
-    { label: "Resume Parsing", value: resumesCount > 0 ? 96.4 : 0, color: "#8b5cf6" },
+    { label: "Resume Parsing", value: (resumesCount || 0) > 0 ? 96.4 : 0, color: "#8b5cf6" },
     { label: "Skill Extraction", value: totalCand ? Math.round((withSkills.length / totalCand) * 1000) / 10 : 0, color: "#22d3ee" },
     { label: "Job Fit Prediction", value: avgFitScore, color: "#34d399" },
     { label: "Success Prediction", value: totalCand ? Math.round(candidates.reduce((s, c) => s + (c.success_prediction || 0), 0) / totalCand * 10) / 10 : 0, color: "#fbbf24" },

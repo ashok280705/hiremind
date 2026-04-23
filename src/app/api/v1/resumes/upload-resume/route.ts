@@ -3,7 +3,7 @@
 import { NextRequest } from "next/server";
 import { authenticateRecruiter, unauthorized, forbidden } from "@/lib/apiHelpers";
 import { extractText, parseResumeText } from "@/lib/resumeEngine";
-import { getDb } from "@/lib/db";
+import { supabase } from "@/lib/db";
 
 const MAX_MB = 10;
 
@@ -40,15 +40,16 @@ export async function POST(req: NextRequest) {
 
   // Persist to DB
   try {
-    const db = getDb();
-    db.prepare(`
-      INSERT INTO resumes (filename, name, email, phone, experience_years, skills, education, raw_text)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      parsed.filename, parsed.name, parsed.email, parsed.phone,
-      parsed.experience_years, JSON.stringify(parsed.skills),
-      JSON.stringify(parsed.education), parsed.raw_text
-    );
+    await supabase.from("resumes").insert({
+      filename: parsed.filename,
+      name: parsed.name,
+      email: parsed.email,
+      phone: parsed.phone,
+      experience_years: parsed.experience_years,
+      skills: parsed.skills,
+      education: parsed.education,
+      raw_text: parsed.raw_text,
+    });
   } catch { /* non-fatal */ }
 
   return Response.json({ success: true, data: parsed });
