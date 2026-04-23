@@ -3,6 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    image: hiremind:latest
     container_name: hiremind-app
     env_file:
       - .env
